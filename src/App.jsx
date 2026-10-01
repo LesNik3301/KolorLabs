@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArrowDownUp, ArrowRight, Building2, Check, ChevronDown, Copy, Droplets,
+  ArrowDownUp, ArrowRight, Building2, Check, ChevronDown, Copy, Droplets, FileDown,
   GitCompareArrows, Image as ImageIcon, Layers3, Lightbulb, Menu, Paintbrush, Plus, Printer,
   Search, ShoppingBag, SlidersHorizontal, UserRound,
   Users, X,
@@ -8,6 +8,7 @@ import {
 import baseColors from './data/colors.json';
 import farrowBallColors from './data/farrowBall.js';
 import { getTintingBase } from './data/colorBase.js';
+import { filterColors, getColorFamily, getColorRecommendations, rgbToLab, deltaEFromLab } from './data/colorTools.js';
 import paintProducts from './data/paintProducts.js';
 import smoothWallImage from './assets/surfaces/smooth-wall.jpg';
 import wallpaperImage from './assets/surfaces/paintable-wallpaper.jpg';
@@ -20,6 +21,7 @@ const colors = [
 const colorsById = new Map(colors.map((color) => [color.id, color]));
 const paintProductsById = new Map(paintProducts.map((product) => [product.id, product]));
 const workspaceStorageKey = 'kolorlab.workspace.v1';
+const defaultProjectName = 'Общий проект';
 const catalogLabels = {
   'RAL Classic': 'RAL',
   'Tikkurila Symphony': 'Tikkurila',
@@ -63,6 +65,8 @@ const applicationFilters = [
   { id: 'интерьер', label: 'Интерьер' },
   { id: 'фасад', label: 'Фасад' },
 ];
+const colorFamilies = ['Все семейства', 'Нейтральные', 'Красные', 'Оранжевые', 'Жёлтые', 'Зелёные', 'Бирюзовые', 'Голубые', 'Синие', 'Фиолетовые', 'Пурпурные'];
+const lightnessFilters = ['Любая светлота', 'Светлые', 'Средние', 'Тёмные'];
 const showcaseSwatches = [
   { code: 'RAL 1013', name: 'Устричный белый', hex: '#EAE6D7' },
   { code: 'RAL 5003', name: 'Сапфирово-синий', hex: '#1F3855' },
@@ -72,28 +76,11 @@ const showcaseSwatches = [
   { code: 'No. 229', name: 'Дыхание слона', hex: '#C6BEB5' },
 ];
 
-function rgbToLab([r, g, b]) {
-  const linear = [r, g, b].map((value) => {
-    const normalized = value / 255;
-    return normalized <= 0.04045 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
-  });
-  const x = (linear[0] * 0.4124 + linear[1] * 0.3576 + linear[2] * 0.1805) / 0.95047;
-  const y = (linear[0] * 0.2126 + linear[1] * 0.7152 + linear[2] * 0.0722);
-  const z = (linear[0] * 0.0193 + linear[1] * 0.1192 + linear[2] * 0.9505) / 1.08883;
-  const f = (value) => value > 0.008856 ? Math.cbrt(value) : 7.787 * value + 16 / 116;
-  const fx = f(x); const fy = f(y); const fz = f(z);
-  return [116 * fy - 16, 500 * (fx - fy), 200 * (fy - fz)];
-}
-
 const colorIndex = colors.map((color) => ({
   color,
   lab: rgbToLab(color.rgb),
-  searchText: `${color.code} ${color.name_ru} ${color.name_en ?? ''} ${color.catalog} ${color.applications.join(' ')}`.toLowerCase(),
+  searchText: `${color.code} ${color.name_ru} ${color.name_en ?? ''} ${color.catalog} ${(color.applications ?? []).join(' ')}`.toLowerCase(),
 }));
-
-function deltaEFromLab(a, b) {
-  return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
-}
 
 function getCatalogAlternatives(sourceColor) {
   const source = colorIndex.find(({ color }) => color.id === sourceColor.id);
@@ -206,9 +193,25 @@ function getArchivedWoodProjectColor(id) {
 function readWorkspace() {
   try {
     const stored = window.localStorage.getItem(workspaceStorageKey);
-    if (!stored) return { clients: [], projects: [], activeClientId: '', activePaintProductId: '', paintPricesByProduct: {}, error: false };
+    if (!stored) return {
+      clients: [],
+      projects: [],
+      activeClientId: '',
+      activePaintProductId: '',
+      paintPricesByProduct: {},
+      activeProjectName: defaultProjectName,
+      projectNames: [defaultProjectName],
+      selectedId: colors[0].id,
+      comparisonIds: [],
+      previewSurface: 'wall',
+      temperature: 4000,
+      area: 32,
+      layers: 2,
+      zone: 'Гостиная',
+      error: false,
+    };
     const parsed = JSON.parse(stored);
-    if (parsed.version !== 1 || !Array.isArray(parsed.clients) || !Array.isArray(parsed.projects)) {
+    if (![1, 2].includes(parsed.version) || !Array.isArray(parsed.clients) || !Array.isArray(parsed.projects)) {
       throw new Error('Unsupported or invalid saved workspace format');
     }
 
@@ -231,6 +234,7 @@ function readWorkspace() {
       return [{
         key: item.key,
         clientId: item.clientId,
+        projectName: typeof item.projectName === 'string' && item.projectName.trim() ? item.projectName : defaultProjectName,
         clientName: clients.find((client) => client.id === item.clientId)?.name ?? '',
         clientPhoneLast4: clients.find((client) => client.id === item.clientId)?.phoneLast4 ?? '',
         color,
@@ -255,10 +259,25 @@ function readWorkspace() {
     );
     const activeClientId = clientIds.has(parsed.activeClientId) ? parsed.activeClientId : '';
     const activePaintProductId = paintProductsById.has(parsed.activePaintProductId) ? parsed.activePaintProductId : '';
-    return { clients, projects, activeClientId, activePaintProductId, paintPricesByProduct, error: false };
+    const projectNames = [...new Set([
+      ...(Array.isArray(parsed.projectNames) ? parsed.projectNames.filter((name) => typeof name === 'string' && name.trim()).map((name) => name.trim()) : []),
+      ...projects.map((project) => project.projectName),
+      defaultProjectName,
+    ])];
+    const activeProjectName = projectNames.includes(parsed.activeProjectName) ? parsed.activeProjectName : projectNames[0];
+    const selectedId = colorsById.has(parsed.selectedColorId) ? parsed.selectedColorId : colors[0].id;
+    const comparisonIds = Array.isArray(parsed.comparisonIds)
+      ? [...new Set(parsed.comparisonIds.filter((id) => colorsById.has(id)))].slice(0, 6)
+      : [];
+    const previewSurface = visualSurfaces.some(({ id }) => id === parsed.previewSurface) ? parsed.previewSurface : 'wall';
+    const temperature = temperatures.some(({ value }) => value === parsed.temperature) ? parsed.temperature : 4000;
+    const area = Number.isFinite(parsed.area) ? Math.max(5, Math.min(150, parsed.area)) : 32;
+    const layers = [1, 2, 3].includes(parsed.layers) ? parsed.layers : 2;
+    const zone = zones.includes(parsed.zone) ? parsed.zone : 'Гостиная';
+    return { clients, projects, activeClientId, activePaintProductId, paintPricesByProduct, activeProjectName, projectNames, selectedId, comparisonIds, previewSurface, temperature, area, layers, zone, error: false };
   } catch (error) {
     console.error('Не удалось загрузить локальные данные KolorLab.', error);
-    return { clients: [], projects: [], activeClientId: '', activePaintProductId: '', paintPricesByProduct: {}, error: true };
+    return { clients: [], projects: [], activeClientId: '', activePaintProductId: '', paintPricesByProduct: {}, activeProjectName: defaultProjectName, projectNames: [defaultProjectName], selectedId: colors[0].id, comparisonIds: [], previewSurface: 'wall', temperature: 4000, area: 32, layers: 2, zone: 'Гостиная', error: true };
   }
 }
 
@@ -326,31 +345,37 @@ function ProductPhotographyMockup() {
 
 function App() {
   const [initialWorkspace] = useState(readWorkspace);
-  const [selectedId, setSelectedId] = useState('ral-7016');
+  const [selectedId, setSelectedId] = useState(initialWorkspace.selectedId);
   const [catalog, setCatalog] = useState(null);
   const [baseFilter, setBaseFilter] = useState('Все базы');
   const [applicationFilter, setApplicationFilter] = useState('all');
+  const [familyFilter, setFamilyFilter] = useState('Все семейства');
+  const [lightnessFilter, setLightnessFilter] = useState('Любая светлота');
   const [search, setSearch] = useState('');
   const [surface, setSurface] = useState(() => {
     const product = paintProductsById.get(initialWorkspace.activePaintProductId);
     return product && !product.surfaces.includes('wall') ? product.surfaces[0] : 'wall';
   });
   const [previewSurface, setPreviewSurface] = useState(() => {
+    if (initialWorkspace.previewSurface) return initialWorkspace.previewSurface;
     const product = paintProductsById.get(initialWorkspace.activePaintProductId);
     if (product?.surfaces.includes('wall')) return 'wall';
     if (product?.surfaces.includes('facade')) return 'plaster';
     return product?.surfaces[0] ?? 'wall';
   });
-  const [temperature, setTemperature] = useState(4000);
+  const [temperature, setTemperature] = useState(initialWorkspace.temperature);
   const [comparison, setComparison] = useState(false);
-  const [area, setArea] = useState(32);
-  const [layers, setLayers] = useState(2);
+  const [area, setArea] = useState(initialWorkspace.area);
+  const [layers, setLayers] = useState(initialWorkspace.layers);
   const [paintProductId, setPaintProductId] = useState(initialWorkspace.activePaintProductId);
   const [paintPricesByProduct, setPaintPricesByProduct] = useState(initialWorkspace.paintPricesByProduct);
-  const [zone, setZone] = useState('Гостиная');
+  const [zone, setZone] = useState(initialWorkspace.zone);
   const [projects, setProjects] = useState(initialWorkspace.projects);
   const [clients, setClients] = useState(initialWorkspace.clients);
   const [activeClientId, setActiveClientId] = useState(initialWorkspace.activeClientId);
+  const [projectNames, setProjectNames] = useState(initialWorkspace.projectNames);
+  const [activeProjectName, setActiveProjectName] = useState(initialWorkspace.activeProjectName);
+  const [newProjectName, setNewProjectName] = useState('');
   const [clientNameInput, setClientNameInput] = useState('');
   const [clientPhoneInput, setClientPhoneInput] = useState('');
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -360,7 +385,7 @@ function App() {
   const [toast, setToast] = useState('');
   const [visibleCount, setVisibleCount] = useState(24);
   const [analogMenu, setAnalogMenu] = useState(null);
-  const [comparisonIds, setComparisonIds] = useState([]);
+  const [comparisonIds, setComparisonIds] = useState(initialWorkspace.comparisonIds);
   const [persistenceError, setPersistenceError] = useState(initialWorkspace.error);
   const loadMoreRef = useRef(null);
   const analogMenuRef = useRef(null);
@@ -384,7 +409,7 @@ function App() {
   const currentSurface = surfaces.find((item) => item.id === surface) ?? surfaces[0];
   const currentTemperature = temperatures.find((item) => item.value === temperature) ?? temperatures[1];
   const activeClient = clients.find((client) => client.id === activeClientId) ?? null;
-  const clientProjects = projects.filter((item) => item.clientId === activeClientId);
+  const clientProjects = projects.filter((item) => item.clientId === activeClientId && item.projectName === activeProjectName);
   const paintCoverage = selectedPaintProduct?.coverageBySurface[surface] ?? null;
   const minimumLiters = paintCoverage ? area * layers / paintCoverage[1] : area * layers / currentSurface.rate;
   const liters = paintCoverage ? area * layers / paintCoverage[0] : area * layers / currentSurface.rate;
@@ -398,21 +423,25 @@ function App() {
       : 'Фасовку уточнить у продавца'
     : optimizeCans(liters, currentBase);
   const paintPricePerLiter = paintProductId ? paintPricesByProduct[paintProductId] : undefined;
-  const filteredColors = useMemo(() => colorIndex.filter(({ color, searchText }) => {
-    const matchesCatalog = catalog === null || color.catalog === catalog;
-    const matchesBase = baseFilter === 'Все базы' || color.base === baseFilter;
-    const applications = color.applications ?? [];
-    const matchesApplication = applicationFilter === 'all' || applications.includes(applicationFilter);
-    const query = search.trim().toLowerCase();
-    return matchesCatalog && matchesBase && matchesApplication && (!query || searchText.includes(query));
-  }).map(({ color }) => color), [catalog, baseFilter, applicationFilter, search]);
+  const filteredColors = useMemo(() => filterColors(colors, {
+    catalog,
+    base: baseFilter,
+    application: applicationFilter,
+    family: familyFilter,
+    lightness: lightnessFilter,
+    query: search,
+  }), [catalog, baseFilter, applicationFilter, familyFilter, lightnessFilter, search]);
   const visibleColors = filteredColors.slice(0, visibleCount);
   const comparedColors = comparisonIds.map((id) => colorsById.get(id)).filter(Boolean);
+  const recommendations = useMemo(
+    () => getColorRecommendations(colors, selected, comparisonIds),
+    [selected, comparisonIds],
+  );
 
   useEffect(() => {
     setVisibleCount(24);
     setAnalogMenu(null);
-  }, [catalog, baseFilter, applicationFilter, search]);
+  }, [catalog, baseFilter, applicationFilter, familyFilter, lightnessFilter, search]);
 
   useEffect(() => {
     if (skipInitialPersistenceRef.current) {
@@ -420,9 +449,10 @@ function App() {
       return;
     }
     try {
-      const storedProjects = projects.map(({ key, clientId, color, zone, area: projectArea, layers: projectLayers, surface: projectSurface, liters: projectLiters, cans: projectCans, paintProduct }) => ({
+      const storedProjects = projects.map(({ key, clientId, projectName, color, zone, area: projectArea, layers: projectLayers, surface: projectSurface, liters: projectLiters, cans: projectCans, paintProduct }) => ({
         key,
         clientId,
+        projectName,
         color: { id: color.id },
         zone,
         area: projectArea,
@@ -433,19 +463,28 @@ function App() {
         paintProduct: paintProduct ? { id: paintProduct.id, pricePerLiter: paintProduct.pricePerLiter } : null,
       }));
       window.localStorage.setItem(workspaceStorageKey, JSON.stringify({
-        version: 1,
+        version: 2,
         clients: clients.map(({ id, name, phoneLast4 }) => ({ id, name, phoneLast4 })),
         projects: storedProjects,
+        projectNames,
+        activeProjectName,
         activeClientId,
         activePaintProductId: paintProductId,
         paintPricesByProduct,
+        selectedColorId: selectedId,
+        comparisonIds,
+        previewSurface,
+        temperature,
+        area,
+        layers,
+        zone,
       }));
       setPersistenceError(false);
     } catch (error) {
       console.error('Не удалось сохранить локальные данные KolorLab.', error);
       setPersistenceError(true);
     }
-  }, [clients, projects, activeClientId, paintProductId, paintPricesByProduct]);
+  }, [clients, projects, activeClientId, activeProjectName, projectNames, paintProductId, paintPricesByProduct, selectedId, comparisonIds, previewSurface, temperature, area, layers, zone]);
 
   useEffect(() => {
     const sentinel = loadMoreRef.current;
@@ -548,6 +587,7 @@ function App() {
     setProjects((items) => [...items, {
       key: `${selected.id}-${Date.now()}`,
       clientId: activeClient.id,
+      projectName: activeProjectName,
       clientName: activeClient.name,
       clientPhoneLast4: activeClient.phoneLast4,
       color: selected,
@@ -566,9 +606,30 @@ function App() {
     setToast(`${selected.code} добавлен в проект`);
   };
 
+  const projectCost = clientProjects.reduce((total, item) => total + (Number.isFinite(item.paintProduct?.pricePerLiter) ? item.liters * item.paintProduct.pricePerLiter : 0), 0);
   const orderText = clientProjects.length
-    ? `KOLORLAB · СПЕЦИФИКАЦИЯ КОЛЕРОВКИ\nКлиент: ${activeClient.name} · •••• ${activeClient.phoneLast4}\n\n${clientProjects.map((item, index) => `${index + 1}. ${item.zone} — ${item.color.code}, ${item.color.name_ru}\n   Каталог: ${item.color.catalog} · ${item.color.hex}\n   Краска: ${item.paintProduct ? `${item.paintProduct.brand} ${item.paintProduct.name}` : 'не выбрана'}\n   Система баз продукта: ${item.paintProduct?.baseSystem ?? 'не выбрана'}${item.paintProduct?.availabilityNote ? `\n   Важно: ${item.paintProduct.availabilityNote}` : ''}\n   Площадь: ${item.area ?? '—'} м² · слоёв: ${item.layers ?? '—'}\n   Колеровочная база оттенка: ${item.base ? `База ${item.base}` : 'не требуется'} · ${item.liters.toFixed(1).replace('.', ',')} л (${item.cans})${Number.isFinite(item.paintProduct?.pricePerLiter) ? `\n   Ориентировочная стоимость: ${(item.liters * item.paintProduct.pricePerLiter).toLocaleString('ru-RU', { maximumFractionDigits: 0 })} ₽` : ''}`).join('\n\n')}\n\nПеред покупкой уточните у продавца совместимость оттенка, системы баз и фасовки.`
+    ? `KOLORLAB · СПЕЦИФИКАЦИЯ КОЛЕРОВКИ\nПроект: ${activeProjectName}\nКлиент: ${activeClient.name} · •••• ${activeClient.phoneLast4}\n\n${clientProjects.map((item, index) => `${index + 1}. ${item.zone} — ${item.color.code}, ${item.color.name_ru}\n   Каталог: ${item.color.catalog} · ${item.color.hex}\n   Краска: ${item.paintProduct ? `${item.paintProduct.brand} ${item.paintProduct.name}` : 'не выбрана'}\n   Система баз продукта: ${item.paintProduct?.baseSystem ?? 'не выбрана'}${item.paintProduct?.availabilityNote ? `\n   Важно: ${item.paintProduct.availabilityNote}` : ''}\n   Площадь: ${item.area ?? '—'} м² · слоёв: ${item.layers ?? '—'}\n   Колеровочная база оттенка: ${item.base ? `База ${item.base}` : 'не требуется'} · ${item.liters.toFixed(1).replace('.', ',')} л (${item.cans})${Number.isFinite(item.paintProduct?.pricePerLiter) ? `\n   Ориентировочная стоимость: ${(item.liters * item.paintProduct.pricePerLiter).toLocaleString('ru-RU', { maximumFractionDigits: 0 })} ₽` : ''}`).join('\n\n')}\n\nИтого краски: ${clientProjects.reduce((total, item) => total + item.liters, 0).toFixed(1).replace('.', ',')} л${projectCost ? `\nОриентировочная стоимость известных позиций: ${projectCost.toLocaleString('ru-RU', { maximumFractionDigits: 0 })} ₽` : ''}\n\nПеред покупкой уточните у продавца совместимость оттенка, системы баз и фасовки.`
     : '';
+
+  const createProject = (event) => {
+    event.preventDefault();
+    const name = newProjectName.trim();
+    if (!name) {
+      setToast('Введите название проекта');
+      return;
+    }
+    const existing = projectNames.find((projectName) => projectName.toLocaleLowerCase('ru') === name.toLocaleLowerCase('ru'));
+    if (existing) {
+      setActiveProjectName(existing);
+      setNewProjectName('');
+      setToast(`Открыт проект «${existing}»`);
+      return;
+    }
+    setProjectNames((items) => [...items, name]);
+    setActiveProjectName(name);
+    setNewProjectName('');
+    setToast(`Создан проект «${name}»`);
+  };
 
   const addClient = (event) => {
     event.preventDefault();
@@ -595,6 +656,16 @@ function App() {
     await navigator.clipboard.writeText(orderText);
     setCopied(true);
     window.setTimeout(() => setCopied(false), 2200);
+  };
+
+  const downloadOrder = () => {
+    const blob = new Blob([orderText], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `KolorLab-${activeProjectName.replace(/[^\p{L}\p{N}-]+/gu, '-')}.txt`;
+    link.click();
+    URL.revokeObjectURL(url);
   };
 
   const toggleComparison = (color) => {
@@ -760,6 +831,10 @@ function App() {
               {selected.hexEstimated && <p className="mt-1 text-[10px] leading-relaxed text-slate-500">Экранный образец приблизительный. Перед покупкой сверьте его с веером.</p>}
               {currentBase === 'C' && <div className="base-warning-surface mt-3 flex items-center gap-2 rounded-lg border px-3 py-2.5 text-[11px]"><Lightbulb size={14} className="shrink-0" />{selectedPaintProduct && !selectedPaintProduct.tintBases?.includes('C') ? 'По каталогу оттенку нужна База C, но совместимость с системой выбранной краски не подтверждена. Уточните у производителя.' : 'Требуется прозрачная База С для оттенка. Сверьте совместимость с системой краски.'}</div>}
               <div className="mt-4">
+                <label htmlFor="project-name" className="mb-2 block text-[10px] font-semibold text-slate-500">ПРОЕКТ</label>
+                <div className="relative"><select id="project-name" value={activeProjectName} onChange={(event) => setActiveProjectName(event.target.value)} className="field w-full appearance-none rounded-lg px-3 py-2.5 pr-8 text-xs">{projectNames.map((name) => <option key={name} value={name}>{name}</option>)}</select><ChevronDown size={13} className="pointer-events-none absolute right-3 top-3 text-slate-500" /></div>
+              </div>
+              <div className="mt-4">
                 <label htmlFor="project-client" className="mb-2 block text-[10px] font-semibold text-slate-500">КЛИЕНТ ПРОЕКТА</label>
                 <div className="grid grid-cols-[1fr_auto] gap-2">
                   <div className="relative">
@@ -786,14 +861,20 @@ function App() {
                 </div>
                 <span className="accent-surface rounded-full px-2.5 py-1 text-[10px] font-bold text-[var(--primary-200)]">{comparisonIds.length}/6</span>
               </div>
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3" aria-label="Выбранные оттенки">
+              <div className="mb-2 text-[9px] font-semibold uppercase tracking-wide text-slate-500">Сравнение на {visualSurfaces.find((item) => item.id === previewSurface)?.label.toLocaleLowerCase('ru')} · {temperature}K</div>
+              <div className="grid grid-cols-3 gap-2" aria-label="Выбранные оттенки">
                 {Array.from({ length: 6 }, (_, index) => {
                   const color = comparedColors[index];
                   return color
                     ? <article key={color.id} className="group relative min-w-0 overflow-hidden rounded-lg border border-[#303843] bg-[#0c1015]">
-                      <button onClick={() => selectColor(color)} className="h-12 w-full transition hover:brightness-110" style={{ backgroundColor: color.hex }} aria-label={`Показать ${color.code} в визуализаторе`} />
+                      <button onClick={() => selectColor(color)} className="comparison-swatch relative h-14 w-full overflow-hidden text-left" aria-label={`Показать ${color.code} в визуализаторе`}>
+                        <img src={visualSurfaces.find((item) => item.id === previewSurface)?.image ?? smoothWallImage} alt="" className="absolute inset-0 h-full w-full object-cover" />
+                        <span className={`absolute inset-0 mix-blend-multiply ${previewSurface === 'wall' ? 'opacity-75' : 'opacity-65'}`} style={{ backgroundColor: color.hex }} />
+                        <span className={`temperature-overlay ${currentTemperature.className}`} />
+                        <span className="absolute inset-x-0 bottom-0 truncate bg-black/55 px-1.5 py-1 text-[9px] font-bold text-white">{color.hex}</span>
+                      </button>
                       <button onClick={() => toggleComparison(color)} className="absolute right-1 top-1 flex h-6 w-6 items-center justify-center rounded-md bg-black/50 text-white/80 opacity-100 transition hover:bg-black/75 sm:opacity-0 sm:group-hover:opacity-100" aria-label={`Убрать ${color.code} из подбора`}><X size={13} /></button>
-                      <div className="truncate px-2 py-1.5 text-[9px] font-semibold text-slate-300">{color.code}</div>
+                      <div className="truncate px-1.5 py-1.5 text-[9px] font-semibold text-slate-300" title={`${color.code} · ${color.name_ru} · LRV ${color.lrv}%`}>{color.code} · LRV {color.lrv}%</div>
                     </article>
                     : <div key={`empty-${index}`} className="flex min-h-[72px] flex-col items-center justify-center rounded-lg border border-dashed border-[#303843] bg-[#0c1015]/60 text-slate-600">
                       <Plus size={14} />
@@ -804,9 +885,16 @@ function App() {
               <button onClick={addSelectedToPicker} disabled={comparisonIds.length >= 6 || comparisonIds.includes(selected.id)} className="btn-primary mt-3 flex w-full items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-xs font-bold disabled:cursor-not-allowed disabled:opacity-50">
                 <Plus size={14} />{comparisonIds.includes(selected.id) ? 'Текущий оттенок уже добавлен' : 'Добавить выбранный оттенок'}
               </button>
-              <div className="mt-4 rounded-xl border border-[#2a313a] bg-[#0c1015] p-3.5">
-                <div className="flex items-center gap-2 text-xs font-semibold text-slate-300"><GitCompareArrows size={14} className="text-[var(--primary-300)]" />Рекомендации по цвету</div>
-                <p className="mt-1.5 text-[10px] leading-relaxed text-slate-500">Подключим рекомендации по сочетанию, контрасту и балансу оттенков на следующем этапе.</p>
+              <div className="mt-3 rounded-xl border border-[#2a313a] bg-[#0c1015] p-3">
+                <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-slate-300"><GitCompareArrows size={14} className="text-[var(--primary-300)]" />Рекомендации к {selected.code}</div>
+                <div className="grid gap-1.5">
+                  {recommendations.map(({ type, description, color }) => <button key={type} onClick={() => toggleComparison(color)} disabled={comparisonIds.includes(color.id) || comparisonIds.length >= 6} className="flex min-w-0 items-center gap-2 rounded-lg border border-[#252c34] bg-[#10151b] p-1.5 text-left transition hover:border-[#414c59] disabled:cursor-not-allowed disabled:opacity-45">
+                    <span className="h-7 w-8 shrink-0 rounded-md border border-white/10" style={{ backgroundColor: color.hex }} />
+                    <span className="min-w-0 flex-1"><span className="block truncate text-[9px] font-bold text-slate-200">{type} · {color.code}</span><span className="block truncate text-[8px] text-slate-500">{description} · {color.name_ru}</span></span>
+                    <Plus size={13} className="shrink-0 text-[var(--primary-300)]" />
+                  </button>)}
+                  {!recommendations.length && <p className="text-[9px] text-slate-500">Для этого оттенка пока нет подходящих сочетаний.</p>}
+                </div>
               </div>
             </section>
           </div>
@@ -842,6 +930,10 @@ function App() {
           <div className="relative mb-3"><Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Поиск по коду, каталогу или названию оттенка..." className="field w-full rounded-lg py-2.5 pl-9 pr-3 text-xs" /></div>
           <div className="mb-3 flex gap-1.5 overflow-x-auto pb-1 scrollbar-thin">{catalogFilters.map((item) => <button key={item.label} onClick={() => setCatalog(item.catalog)} className={`chip shrink-0 rounded-md px-2.5 py-1.5 text-[10px] font-medium ${catalog === item.catalog ? 'active' : ''}`}>{item.label}</button>)}</div>
           <div className="mb-3 flex gap-1.5 overflow-x-auto pb-1 scrollbar-thin" aria-label="Фильтр по базе колеровки">{['Все базы', 'A', 'C'].map((base) => { const label = base === 'Все базы' ? base : `База ${base} (${base === 'A' ? 'Белая' : 'Прозрачная'})`; return <button key={base} onClick={() => setBaseFilter(base)} className={`chip shrink-0 rounded-md px-2.5 py-1.5 text-[10px] font-medium ${baseFilter === base ? 'active' : ''}`}>{label}</button>; })}</div>
+          <div className="mb-3 grid grid-cols-2 gap-2" aria-label="Фильтры по семейству и светлоте">
+            <select aria-label="Семейство цвета" value={familyFilter} onChange={(event) => setFamilyFilter(event.target.value)} className="field min-w-0 rounded-lg px-2 py-2 text-[10px]">{colorFamilies.map((family) => <option key={family}>{family}</option>)}</select>
+            <select aria-label="Светлота цвета" value={lightnessFilter} onChange={(event) => setLightnessFilter(event.target.value)} className="field min-w-0 rounded-lg px-2 py-2 text-[10px]">{lightnessFilters.map((filter) => <option key={filter}>{filter}</option>)}</select>
+          </div>
           <div className="mb-5 flex gap-1.5 overflow-x-auto pb-1 scrollbar-thin" aria-label="Фильтр по области применения">{applicationFilters.map((item) => <button key={item.id} onClick={() => setApplicationFilter(item.id)} className={`chip shrink-0 rounded-md px-2.5 py-1.5 text-[10px] font-medium ${applicationFilter === item.id ? 'active' : ''}`}>{item.label}</button>)}</div>
           </div>
           <div className="catalog-results min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1">
@@ -998,6 +1090,13 @@ function App() {
             </section>
             <section>
               <div className="mb-3 flex items-center justify-between"><div className="eyebrow">ПРОЕКТЫ КЛИЕНТА</div>{activeClient && <span className="text-[10px] text-slate-500">{activeClient.name} ···· {activeClient.phoneLast4}</span>}</div>
+              <form onSubmit={createProject} className="subtle-panel mb-3 flex gap-2 p-2.5">
+                <input value={newProjectName} onChange={(event) => setNewProjectName(event.target.value)} placeholder="Название проекта" aria-label="Название нового проекта" className="field min-w-0 flex-1 rounded-lg px-2.5 py-2 text-xs" />
+                <button type="submit" className="btn-secondary flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-2 text-[10px] font-semibold"><Plus size={13} />Создать</button>
+              </form>
+              <div className="mb-3 flex flex-wrap gap-1.5">
+                {projectNames.map((name) => <button key={name} onClick={() => setActiveProjectName(name)} className={`chip rounded-md px-2.5 py-1.5 text-[10px] font-semibold ${activeProjectName === name ? 'active' : ''}`}>{name}</button>)}
+              </div>
               {!activeClient ? <div className="rounded-xl border border-dashed border-[#343b45] px-4 py-8 text-center text-xs text-slate-500">Создайте или выберите клиента, чтобы посмотреть и сохранить его проекты.</div> :
                 clientProjects.length ? <div className="space-y-3">
                   {clientProjects.map((item) => <article key={item.key} className="subtle-panel p-3.5">
@@ -1023,6 +1122,7 @@ function App() {
           </div>
           <div className="border-t border-[#252b33] p-5">
             <button disabled={!clientProjects.length} onClick={copyOrder} className="btn-primary flex w-full items-center justify-center gap-2 rounded-lg py-3 text-xs font-bold disabled:cursor-not-allowed disabled:opacity-40">{copied ? <Check size={15} /> : <Copy size={15} />}{copied ? 'Скопировано' : 'Скопировать для магазина'}</button>
+            <button disabled={!clientProjects.length} onClick={downloadOrder} className="btn-secondary mt-2 flex w-full items-center justify-center gap-2 rounded-lg py-3 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-40"><FileDown size={15} />Скачать спецификацию TXT</button>
             <button disabled={!clientProjects.length} onClick={() => window.print()} className="btn-secondary mt-2 flex w-full items-center justify-center gap-2 rounded-lg py-3 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-40"><Printer size={15} />Печать / сохранить PDF</button>
             <div role="status" className={`mt-3 text-center text-[10px] ${persistenceError ? 'base-warning' : 'text-slate-600'}`}>{persistenceError ? 'Не удалось сохранить изменения на этом устройстве.' : 'Клиенты и проекты сохраняются на этом устройстве.'}</div>
             <div className="mt-2 text-center text-[10px] text-slate-600">В заказ попадут только имя клиента и последние 4 цифры телефона.</div>
@@ -1032,6 +1132,7 @@ function App() {
       <section className="print-specification" aria-label="Печатная спецификация проекта">
         <div className="print-brand">KOLOR<span>LAB</span> · ЦИФРОВАЯ ЛАБОРАТОРИЯ ЦВЕТА</div>
         <h1>Спецификация окрашивания</h1>
+        <p className="print-client">Проект: <strong>{activeProjectName}</strong></p>
         {activeClient
           ? <p className="print-client">Клиент: <strong>{activeClient.name}</strong> · телефон ···· {activeClient.phoneLast4}</p>
           : <p className="print-client">Клиент: не выбран</p>}
@@ -1049,7 +1150,7 @@ function App() {
           </table>
           <div className="print-totals">
             <strong>Итого материалов: {clientProjects.reduce((total, item) => total + item.liters, 0).toFixed(1).replace('.', ',')} л</strong>
-            <span>База A: {clientProjects.filter((item) => item.base === 'A').reduce((total, item) => total + item.liters, 0).toFixed(1).replace('.', ',')} л · База C: {clientProjects.filter((item) => item.base === 'C').reduce((total, item) => total + item.liters, 0).toFixed(1).replace('.', ',')} л · Без базы: {clientProjects.filter((item) => !item.base).reduce((total, item) => total + item.liters, 0).toFixed(1).replace('.', ',')} л</span>
+            <span>База A: {clientProjects.filter((item) => item.base === 'A').reduce((total, item) => total + item.liters, 0).toFixed(1).replace('.', ',')} л · База C: {clientProjects.filter((item) => item.base === 'C').reduce((total, item) => total + item.liters, 0).toFixed(1).replace('.', ',')} л · Без базы: {clientProjects.filter((item) => !item.base).reduce((total, item) => total + item.liters, 0).toFixed(1).replace('.', ',')} л{projectCost > 0 ? ` · ориентировочная стоимость: ${projectCost.toLocaleString('ru-RU', { maximumFractionDigits: 0 })} ₽` : ''}</span>
           </div>
         </> : <p>В проект пока не добавлены цвета.</p>}
         <p className="print-note">Цифровые HEX-образцы предназначены для ориентира и могут отличаться от готового покрытия. Перед закупкой уточните код, базу, тип краски и фасовку у продавца; рекомендован пробный выкрас.</p>
