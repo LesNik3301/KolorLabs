@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowDownUp, ArrowRight, Building2, Check, ChevronDown, Copy, Droplets, FileDown,
   GitCompareArrows, Image as ImageIcon, Layers3, Lightbulb, Menu, Paintbrush, Plus, Printer,
-  Search, ShoppingBag, SlidersHorizontal, UserRound,
+  Search, ShoppingBag, SlidersHorizontal, Trash2, UserRound,
   Users, X,
 } from 'lucide-react';
 import baseColors from './data/colors.json';
@@ -379,6 +379,10 @@ function App() {
   const [clientNameInput, setClientNameInput] = useState('');
   const [clientPhoneInput, setClientPhoneInput] = useState('');
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [clientCardId, setClientCardId] = useState('');
+  const [confirmClientDeletion, setConfirmClientDeletion] = useState(false);
+  const clientCardTriggerRef = useRef(null);
+  const clientCardCloseRef = useRef(null);
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [activeMobileTab, setActiveMobileTab] = useState('Визуализация');
   const [copied, setCopied] = useState(false);
@@ -409,6 +413,10 @@ function App() {
   const currentSurface = surfaces.find((item) => item.id === surface) ?? surfaces[0];
   const currentTemperature = temperatures.find((item) => item.value === temperature) ?? temperatures[1];
   const activeClient = clients.find((client) => client.id === activeClientId) ?? null;
+  const openedClientCard = clients.find((client) => client.id === clientCardId) ?? null;
+  const openedClientProjects = openedClientCard
+    ? projects.filter((item) => item.clientId === openedClientCard.id)
+    : [];
   const clientProjects = projects.filter((item) => item.clientId === activeClientId && item.projectName === activeProjectName);
   const paintCoverage = selectedPaintProduct?.coverageBySurface[surface] ?? null;
   const minimumLiters = paintCoverage ? area * layers / paintCoverage[1] : area * layers / currentSurface.rate;
@@ -503,6 +511,19 @@ function App() {
     const timer = window.setTimeout(() => setToast(''), 2800);
     return () => window.clearTimeout(timer);
   }, [toast]);
+
+  useEffect(() => {
+    if (!clientCardId) return undefined;
+    clientCardCloseRef.current?.focus();
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') {
+        setClientCardId('');
+        setConfirmClientDeletion(false);
+      }
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [clientCardId]);
 
   useEffect(() => {
     if (!analogMenu) return undefined;
@@ -650,6 +671,19 @@ function App() {
     setClientPhoneInput('');
     setDrawerOpen(false);
     setToast(`Клиент ${client.name} добавлен`);
+  };
+
+  const deleteClient = () => {
+    if (!openedClientCard) return;
+    const removedProjectCount = openedClientProjects.length;
+    setClients((items) => items.filter((client) => client.id !== openedClientCard.id));
+    setProjects((items) => items.filter((item) => item.clientId !== openedClientCard.id));
+    if (activeClientId === openedClientCard.id) setActiveClientId('');
+    setClientCardId('');
+    setConfirmClientDeletion(false);
+    setToast(removedProjectCount
+      ? `Клиент «${openedClientCard.name}» удалён. Проектов удалено: ${removedProjectCount}`
+      : `Клиент «${openedClientCard.name}» удалён`);
   };
 
   const copyOrder = async () => {
@@ -1073,7 +1107,7 @@ function App() {
               {clients.length > 0 && <div className="mb-3 grid gap-2">
                 {clients.map((client) => {
                   const isActive = activeClientId === client.id;
-                  return <button key={client.id} onClick={() => setActiveClientId(client.id)} className={`flex items-center gap-3 rounded-xl border p-3 text-left transition ${isActive ? 'accent-selection' : 'border-[#2b323c] bg-[#0d1117] hover:bg-[#181e25]'}`}>
+                  return <button key={client.id} onClick={(event) => { clientCardTriggerRef.current = event.currentTarget; setActiveClientId(client.id); setClientCardId(client.id); setConfirmClientDeletion(false); }} aria-haspopup="dialog" className={`flex items-center gap-3 rounded-xl border p-3 text-left transition ${isActive ? 'accent-selection' : 'border-[#2b323c] bg-[#0d1117] hover:bg-[#181e25]'}`}>
                     <span className="accent-surface text-[var(--primary-300)] flex h-9 w-9 shrink-0 items-center justify-center rounded-full"><UserRound size={16} /></span>
                     <span className="min-w-0 flex-1"><span className="block truncate text-xs font-semibold">{client.name}</span><span className="mt-1 block text-[10px] text-slate-500">Телефон ···· {client.phoneLast4}</span></span>
                     {isActive && <Check size={14} className="text-[var(--primary-300)]" />}
@@ -1128,6 +1162,47 @@ function App() {
             <div className="mt-2 text-center text-[10px] text-slate-600">В заказ попадут только имя клиента и последние 4 цифры телефона.</div>
           </div>
         </aside>
+      </div>}
+      {openedClientCard && <div className="fixed inset-0 z-[60] grid w-screen place-items-center p-4">
+        <button aria-label="Закрыть карточку клиента" onClick={() => { setClientCardId(''); setConfirmClientDeletion(false); clientCardTriggerRef.current?.focus(); }} className="drawer-backdrop absolute inset-0" />
+        <section role="dialog" aria-modal="true" aria-labelledby="client-card-title" className="relative z-10 flex max-h-[min(680px,calc(100dvh-32px))] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-[#303944] bg-[#11161d] shadow-2xl">
+          <div className="flex items-start justify-between gap-4 border-b border-[#252d37] px-5 py-5 sm:px-6">
+            <div className="flex min-w-0 items-center gap-3">
+              <span className="accent-surface flex h-12 w-12 shrink-0 items-center justify-center rounded-full text-[var(--primary-300)]"><UserRound size={20} /></span>
+              <div className="min-w-0">
+                <div className="eyebrow">КАРТОЧКА КЛИЕНТА</div>
+                <h2 id="client-card-title" className="mt-1 truncate font-['Manrope'] text-lg font-bold">{openedClientCard.name}</h2>
+                <p className="mt-1 text-xs text-slate-400">Телефон ···· {openedClientCard.phoneLast4}</p>
+              </div>
+            </div>
+            <button ref={clientCardCloseRef} aria-label="Закрыть карточку клиента" onClick={() => { setClientCardId(''); setConfirmClientDeletion(false); clientCardTriggerRef.current?.focus(); }} className="icon-button h-9 w-9 shrink-0 rounded-lg text-slate-400"><X size={18} /></button>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5 scrollbar-thin sm:px-6">
+            <div className="mb-3 flex items-center justify-between">
+              <div className="eyebrow">ПРОЕКТЫ КЛИЕНТА</div>
+              <span className="text-[10px] text-slate-500">{openedClientProjects.length}</span>
+            </div>
+            {openedClientProjects.length ? <div className="space-y-2">
+              {openedClientProjects.map((item) => <article key={item.key} className="subtle-panel flex items-center gap-3 p-3">
+                <span className="h-11 w-11 shrink-0 rounded-lg border border-white/10" style={{ backgroundColor: item.color.hex }} />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-xs font-semibold">{item.projectName}</div>
+                  <div className="mt-1 truncate text-[11px] text-slate-400">{item.color.code} · {item.color.name_ru}</div>
+                  <div className="mt-1 truncate text-[10px] text-slate-500">{item.zone} · {item.liters.toFixed(1).replace('.', ',')} л · {item.base ? `База ${item.base}` : 'Без базы'}</div>
+                </div>
+              </article>)}
+            </div> : <div className="rounded-xl border border-dashed border-[#343b45] px-4 py-8 text-center text-xs text-slate-500">У клиента пока нет сохранённых проектов.</div>}
+          </div>
+          <div className="space-y-3 border-t border-[#252d37] p-4 sm:px-6">
+            {confirmClientDeletion ? <div className="rounded-xl border border-rose-500/30 bg-rose-500/5 p-3">
+              <p className="text-xs leading-relaxed text-slate-300">Удалить карточку «{openedClientCard.name}»? Вместе с ней будут удалены все её проекты ({openedClientProjects.length}). Это действие нельзя отменить.</p>
+              <div className="mt-3 flex gap-2">
+                <button onClick={deleteClient} className="flex-1 rounded-lg bg-rose-500/15 px-3 py-2.5 text-xs font-semibold text-rose-300 transition hover:bg-rose-500/25">Удалить клиента и проекты</button>
+                <button onClick={() => setConfirmClientDeletion(false)} className="btn-secondary rounded-lg px-4 py-2.5 text-xs font-semibold">Отмена</button>
+              </div>
+            </div> : <button onClick={() => setConfirmClientDeletion(true)} className="flex w-full items-center justify-center gap-2 rounded-lg border border-rose-500/20 px-3 py-2.5 text-xs font-semibold text-rose-300 transition hover:border-rose-500/40 hover:bg-rose-500/10"><Trash2 size={14} />Удалить клиента</button>}
+          </div>
+        </section>
       </div>}
       <section className="print-specification" aria-label="Печатная спецификация проекта">
         <div className="print-brand">KOLOR<span>LAB</span> · ЦИФРОВАЯ ЛАБОРАТОРИЯ ЦВЕТА</div>
