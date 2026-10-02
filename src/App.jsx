@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowDownUp, ArrowRight, Building2, Check, ChevronDown, Copy, Droplets, FileDown,
-  GitCompareArrows, Image as ImageIcon, Layers3, Lightbulb, Menu, Paintbrush, Plus, Printer,
+  Expand, GitCompareArrows, Image as ImageIcon, Layers3, Lightbulb, Menu, Paintbrush, Plus, Printer,
   Search, ShoppingBag, SlidersHorizontal, Trash2, UserRound,
   Users, X,
 } from 'lucide-react';
@@ -391,6 +391,7 @@ function App() {
   const [analogMenu, setAnalogMenu] = useState(null);
   const [comparisonIds, setComparisonIds] = useState(initialWorkspace.comparisonIds);
   const [persistenceError, setPersistenceError] = useState(initialWorkspace.error);
+  const [expandedColor, setExpandedColor] = useState(null);
   const loadMoreRef = useRef(null);
   const analogMenuRef = useRef(null);
   const holdTimerRef = useRef(null);
@@ -501,7 +502,7 @@ function App() {
       if (entries[0]?.isIntersecting) {
         setVisibleCount((count) => Math.min(count + 24, filteredColors.length));
       }
-    }, { root: sentinel.closest('.catalog-results'), rootMargin: '240px 0px' });
+    }, { root: sentinel.closest('.catalog-drawer-panel'), rootMargin: '240px 0px' });
     observer.observe(sentinel);
     return () => observer.disconnect();
   }, [filteredColors.length, visibleCount]);
@@ -540,6 +541,20 @@ function App() {
       document.removeEventListener('keydown', dismissOnEscape);
     };
   }, [analogMenu]);
+
+  useEffect(() => {
+    if (!expandedColor) return undefined;
+    const previousOverflow = document.body.style.overflow;
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') setExpandedColor(null);
+    };
+    document.body.style.overflow = 'hidden';
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [expandedColor]);
 
   useEffect(() => {
     if (!catalogOpen || window.matchMedia('(min-width: 1280px)').matches) return undefined;
@@ -767,7 +782,7 @@ function App() {
         </div>
 
         <nav className="mobile-tabbar -mx-4 mb-4 flex gap-1 border-y border-[#222831] px-4 py-2 xl:hidden">
-          {['Визуализация', 'Расчёт', 'Подбор', 'Цвет'].map((tab) => <button key={tab} onClick={() => { setActiveMobileTab(tab); if (tab === 'Цвет') setCatalogOpen(true); }} className={`flex-1 rounded-lg py-2 text-xs font-semibold ${activeMobileTab === tab ? 'accent-surface text-[var(--primary-100)]' : 'text-slate-500'}`}>{tab}</button>)}
+          {['Визуализация', 'Расчёт и подбор', 'Цвет'].map((tab) => <button key={tab} onClick={() => { setActiveMobileTab(tab); if (tab === 'Цвет') setCatalogOpen(true); }} className={`flex-1 rounded-lg py-2 text-[11px] font-semibold ${activeMobileTab === tab ? 'accent-surface text-[var(--primary-100)]' : 'text-slate-500'}`}>{tab}</button>)}
         </nav>
 
         <div className="dashboard-workspace grid items-stretch gap-5">
@@ -787,7 +802,7 @@ function App() {
 
           </div>
 
-          <div className={`dashboard-column dashboard-column-center ${activeMobileTab !== 'Расчёт' && activeMobileTab !== 'Подбор' ? 'hidden xl:flex' : ''}`}>
+          <div className={`dashboard-column dashboard-column-center ${activeMobileTab !== 'Расчёт и подбор' ? 'hidden xl:flex' : ''}`}>
             <section className="dashboard-calculator panel p-4 sm:p-5">
               <div className="mb-4 flex items-start justify-between"><div><div className="eyebrow">РАСЧЁТ КРАСКИ</div><h2 className="mt-1 text-sm font-semibold">Сколько понадобится?</h2></div><div className="rounded-lg bg-[#1a2027] p-2 text-[var(--primary-300)]"><Droplets size={16} /></div></div>
               <div className="mb-4 flex items-end justify-between"><label htmlFor="area" className="text-xs text-slate-400">Площадь окрашивания</label><div className="text-right"><span className="font-['Manrope'] text-xl font-bold">{area}</span><span className="ml-1 text-xs text-slate-500">м²</span></div></div>
@@ -886,7 +901,7 @@ function App() {
                 <button onClick={addToProject} className="btn-primary flex items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-xs font-bold"><Plus size={15} />В проект</button>
               </div>
             </section>
-            <section className={`dashboard-palettes panel min-h-0 p-4 sm:p-5 ${activeMobileTab !== 'Подбор' ? 'hidden xl:flex' : ''}`} aria-label="Карточка подбора цветов">
+            <section className={`dashboard-palettes panel min-h-0 p-4 sm:p-5 ${activeMobileTab !== 'Расчёт и подбор' ? 'hidden xl:flex' : ''}`} aria-label="Карточка подбора цветов">
               <div className="mb-4 flex items-start justify-between gap-3">
                 <div>
                   <div className="eyebrow">ВАША КОЛЛЕКЦИЯ</div>
@@ -936,7 +951,8 @@ function App() {
 
         <div className={`catalog-drawer-overlay fixed inset-0 z-40 flex justify-end ${catalogOpen ? 'catalog-is-open' : ''}`}>
         <button aria-label="Закрыть каталог цветов" onClick={closeCatalog} className="drawer-backdrop absolute inset-0" />
-        <section role={catalogOpen ? 'dialog' : 'region'} aria-modal={catalogOpen || undefined} aria-label="Каталог оттенков" className="catalog-drawer-panel drawer relative flex h-full w-full max-w-[1100px] flex-col border-l border-[#29303a] bg-[#10141a] p-4 sm:p-5">
+        <section role={catalogOpen ? 'dialog' : 'region'} aria-modal={catalogOpen || undefined} aria-label="Каталог оттенков" className="catalog-drawer-panel drawer relative flex h-full w-full max-w-[1100px] flex-col overflow-y-auto border-l border-[#29303a] bg-[#10141a] p-4 sm:p-5">
+          <button aria-label="Закрыть каталог цветов" onClick={closeCatalog} className="catalog-mobile-close sticky top-2 z-20 -mb-9 flex h-8 w-8 shrink-0 self-end items-center justify-center rounded-lg border border-[#343d48] bg-[#10141a]/95 text-slate-400 shadow-lg backdrop-blur"><X size={16} /></button>
           <div className="catalog-drawer-header flex shrink-0 items-start justify-between gap-4 border-b border-[#252b33] pb-4">
             <div className="min-w-0">
               <div className="eyebrow">КАТАЛОГ ОТТЕНКОВ</div>
@@ -970,7 +986,7 @@ function App() {
           </div>
           <div className="mb-5 flex gap-1.5 overflow-x-auto pb-1 scrollbar-thin" aria-label="Фильтр по области применения">{applicationFilters.map((item) => <button key={item.id} onClick={() => setApplicationFilter(item.id)} className={`chip shrink-0 rounded-md px-2.5 py-1.5 text-[10px] font-medium ${applicationFilter === item.id ? 'active' : ''}`}>{item.label}</button>)}</div>
           </div>
-          <div className="catalog-results min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1">
+          <div className="catalog-results min-h-0 flex-none pr-1">
           {filteredColors.length > 0 && <div>
             <div className="catalog-swatch-grid grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-5 min-[1900px]:grid-cols-6">
             {visibleColors.map((color) => {
@@ -1029,9 +1045,12 @@ function App() {
                     <span className="rounded-full border border-current/20 bg-black/[.07] px-2 py-0.5 text-[9px] font-bold">База {color.base}</span>
                   </span>
                 </button>
-                <button onClick={() => toggleComparison(color)} aria-pressed={comparisonSelected} className={`mt-1.5 flex w-full items-center justify-center gap-1.5 rounded-md border px-2 py-1.5 text-[9px] font-semibold transition ${comparisonSelected ? 'accent-selection' : 'border-[#252c34] bg-[#10151b] text-slate-500 hover:border-[#414c59] hover:text-slate-300'}`}>
-                  {comparisonSelected ? <Check size={11} /> : <Plus size={11} />}{comparisonSelected ? 'Добавлено' : 'Добавить'}
-                </button>
+                <div className="mt-1.5 flex gap-1.5">
+                  <button onClick={() => toggleComparison(color)} aria-pressed={comparisonSelected} className={`flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-md border px-2 py-1.5 text-[9px] font-semibold transition ${comparisonSelected ? 'accent-selection' : 'border-[#252c34] bg-[#10151b] text-slate-500 hover:border-[#414c59] hover:text-slate-300'}`}>
+                    {comparisonSelected ? <Check size={11} /> : <Plus size={11} />}{comparisonSelected ? 'Добавлено' : 'Добавить'}
+                  </button>
+                  <button onClick={() => setExpandedColor(color)} aria-label={`Развернуть ${color.code} на весь экран`} title="На весь экран" className="flex h-7 w-8 shrink-0 items-center justify-center rounded-md border border-[#343d48] bg-[#10151b] text-slate-400 transition hover:border-[var(--primary-400)] hover:text-[var(--primary-200)]"><Expand size={14} /></button>
+                </div>
               </div>;
             })}
             </div>
@@ -1093,6 +1112,32 @@ function App() {
         </section>
         </div>
       </main>
+
+      {expandedColor && <div className="fixed inset-0 z-[80] flex min-h-[100dvh] w-screen flex-col justify-between overflow-hidden" style={{ backgroundColor: expandedColor.hex }}>
+        <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/35 via-transparent to-black/65" />
+        <div className="pointer-events-none absolute inset-0 border-[12px] border-black/5 sm:border-[20px]" />
+        <section role="dialog" aria-modal="true" aria-labelledby="expanded-color-title" className="relative flex min-h-[100dvh] flex-col justify-between p-5 pt-[max(20px,env(safe-area-inset-top))] sm:p-8 sm:pt-[max(32px,env(safe-area-inset-top))]">
+          <div className="flex items-start justify-between gap-4">
+            <span className="rounded-full border border-white/20 bg-black/20 px-3 py-1.5 text-[10px] font-semibold tracking-[.12em] text-white/80 backdrop-blur">ПОЛНОЭКРАННЫЙ ОБРАЗЕЦ</span>
+            <button autoFocus onClick={() => setExpandedColor(null)} aria-label="Закрыть полноэкранный образец" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-white/25 bg-black/25 text-white shadow-lg backdrop-blur transition hover:bg-black/45"><X size={19} /></button>
+          </div>
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-8 text-center">
+            <div className="max-w-3xl text-white drop-shadow-[0_2px_18px_rgba(0,0,0,0.55)]">
+              <div className="text-[clamp(1rem,3vw,1.5rem)] font-semibold tracking-wide">{getCatalogLabel(expandedColor.catalog)}</div>
+              <h2 id="expanded-color-title" className="mt-2 font-['Manrope'] text-[clamp(3rem,15vw,9rem)] font-extrabold leading-none tracking-[-.06em]">{expandedColor.code}</h2>
+              <p className="mt-4 text-[clamp(1rem,4vw,2rem)] font-medium">{expandedColor.name_ru}</p>
+            </div>
+          </div>
+          <div className="relative mx-auto w-full max-w-2xl rounded-2xl border border-white/15 bg-black/35 p-4 text-white shadow-2xl backdrop-blur-xl sm:p-5">
+            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+              <div><span className="block text-[9px] font-bold tracking-[.14em] text-white/55">ЦИФРОВОЙ ОБРАЗЕЦ</span><span className="mt-0.5 block font-mono text-lg font-semibold">{expandedColor.hex}</span></div>
+              <div className="flex items-center gap-2"><span className="rounded-full border border-white/15 bg-white/10 px-3 py-1.5 text-[10px] font-semibold">LRV {expandedColor.lrv}%</span><span className="rounded-full border border-white/15 bg-white/10 px-3 py-1.5 text-[10px] font-semibold">База {expandedColor.base}</span></div>
+            </div>
+            {expandedColor.hexEstimated && <p className="mt-3 text-[10px] leading-relaxed text-white/70">Экранный оттенок приблизительный; цвет зависит от дисплея и освещения. Перед покупкой проверьте веер и сделайте пробный выкрас.</p>}
+            <button onClick={() => { selectColor(expandedColor); setExpandedColor(null); }} className="btn-primary mt-4 flex w-full items-center justify-center gap-2 rounded-xl py-3 text-sm font-bold"><Check size={16} />Выбрать этот цвет</button>
+          </div>
+        </section>
+      </div>}
 
       {drawerOpen && <div className="fixed inset-0 z-40 flex justify-end">
         <button aria-label="Закрыть панель" onClick={() => setDrawerOpen(false)} className="drawer-backdrop absolute inset-0" />
